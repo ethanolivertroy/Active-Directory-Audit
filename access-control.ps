@@ -1,0 +1,91 @@
+# Script to gather FedRAMP relevant access control evidence from Active Directory
+
+# Create output directory
+$outputPath = "C:\Temp\FedRAMP_Evidence"
+if (!(Test-Path $outputPath)) {
+    New-Item -ItemType Directory -Path $outputPath
+}
+
+# 1. User Account Information and Privileged Accounts
+Write-Host "Gathering user account information..." -ForegroundColor Green
+Get-ADUser -Filter * -Properties Enabled, PasswordLastSet, LastLogonDate, 
+    PasswordNeverExpires, AccountExpirationDate, MemberOf | 
+    Select-Object Name, SamAccountName, Enabled, PasswordLastSet, LastLogonDate, 
+    PasswordNeverExpires, AccountExpirationDate |
+    Export-Csv "$outputPath\UserAccounts.csv" -NoTypeInformation
+
+# 2. Privileged Groups and Memberships
+Write-Host "Gathering privileged group information..." -ForegroundColor Green
+$privilegedGroups = @(
+    "Domain Admins", "Enterprise Admins", "Schema Admins", "Administrators",
+    "Backup Operators", "Account Operators", "Server Operators", "Print Operators"
+)
+
+foreach ($group in $privilegedGroups) {
+    try {
+        $members = Get-ADGroupMember -Identity $group -Recursive | 
+            Select-Object Name, SamAccountName, ObjectClass
+        $members | Export-Csv "$outputPath\${group}_Members.csv" -NoTypeInformation
+    } catch {
+        Write-Host "Could not retrieve members for group: $group" -ForegroundColor Yellow
+    }
+}
+
+# 3. Password Policy Settings
+Write-Host "Gathering password policy information..." -ForegroundColor Green
+Get-ADDefaultDomainPasswordPolicy | 
+    Select-Object ComplexityEnabled, LockoutDuration, LockoutObservationWindow, 
+    LockoutThreshold, MaxPasswordAge, MinPasswordAge, MinPasswordLength, 
+    PasswordHistoryCount |
+    Export-Csv "$outputPath\PasswordPolicy.csv" -NoTypeInformation
+
+# 4. Fine-Grained Password Policies if applicable
+Get-ADFineGrainedPasswordPolicy -Filter * | 
+    Select-Object Name, Precedence, ComplexityEnabled, LockoutDuration, 
+    LockoutObservationWindow, LockoutThreshold, MaxPasswordAge, MinPasswordAge, 
+    MinPasswordLength, PasswordHistoryCount |
+    Export-Csv "$outputPath\FineGrainedPasswordPolicies.csv" -NoTypeInformation
+
+# 5. Security Audit Policy Configuration
+Write-Host "Gathering audit policy information..." -ForegroundColor Green
+auditpol /get /category:* | Out-File "$outputPath\AuditPolicy.txt"
+
+# 6. Group Policy Objects related to security
+Write-Host "Gathering security-related GPOs..." -ForegroundColor Green
+$securityGPOs = Get-GPO -All | Where-Object {
+    $report = [xml](Get-GPOReport -Guid $_.Id -ReportType Xml)
+    $report.GPO.Computer.ExtensionData.Extension.Name -contains "Security" -or
+    $report.GPO.User.ExtensionData.Extension.Name -contains "Security"
+}
+$securityGPOs | Select-Object DisplayName, ID, CreationTime, ModificationTime |
+    Export-Csv "$outputPath\SecurityGPOs.csv" -NoTypeInformation
+
+# 7. OU Structure
+Write-Host "Gathering OU structure..." -ForegroundColor Green
+Get-ADOrganizationalUnit -Filter * -Properties Description, ProtectedFromAccidentalDeletion |
+    Select-Object Name, DistinguishedName, Description, ProtectedFromAccidentalDeletion |
+    Export-Csv "$outputPath\OUStructure.csv" -NoTypeInformation
+
+# 8. User Rights Assignments (requires RSAT)
+Write-Host "Gathering user rights assignments from GPOs..." -ForegroundColor Green
+foreach ($gpo in $securityGPOs) {
+    $report = [xml](Get-GPOReport -Guid $gpo.Id -ReportType Xml)
+    $report.Save("$outputPath\GPO_$($gpo.DisplayName)_Report.xml")
+}
+
+# 9. Account Lockout and Password Settings Objects
+Write-Host "Gathering account lockout settings..." -ForegroundColor Green
+$lockoutSettings = @{
+    "Account lockout threshold" = (net accounts | Select-String "Lockout threshold").ToString()
+    "Lockout duration" = (net accounts | Select-String "Lockout duration").ToString()
+    "Lockout observation window" = (net accounts | Select-String "Lockout observation").ToString()
+}
+$lockoutSettings | ConvertTo-Json | Out-File "$outputPath\AccountLockoutSettings.json"
+
+# 10. Service Accounts
+Write-Host "Gathering service account information..." -ForegroundColor Green
+Get-ADUser -Filter {ServicePrincipalName -like "*"} -Properties * |
+    Select-Object Name, SamAccountName, Enabled, PasswordLastSet, PasswordNeverExpires |
+    Export-Csv "$outputPath\ServiceAccounts.csv" -NoTypeInformation
+
+Write-Host "Evidence collection complete. Files saved to $outputPath" -ForegroundColor Green
