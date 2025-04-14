@@ -1,0 +1,28 @@
+# Script to retrieve all GPO policies in Active Directory
+# Import the required module for Group Policy management
+Import-Module GroupPolicy
+
+# Get all GPOs in the domain
+$GPOs = Get-GPO -All
+
+# Output basic information about each GPO
+Write-Host "Total GPOs found:" $GPOs.Count
+Write-Host "-------------------------------------"
+
+# Create a more detailed report
+foreach ($GPO in $GPOs) {
+    Write-Host "Name: $($GPO.DisplayName)"
+    Write-Host "ID: $($GPO.Id)"
+    Write-Host "Domain: $($GPO.DomainName)"
+    Write-Host "Created: $($GPO.CreationTime)"
+    Write-Host "Modified: $($GPO.ModificationTime)"
+    Write-Host "Owner: $($GPO.Owner)"
+    Write-Host "Status: $($GPO.GpoStatus)"
+    Write-Host "-------------------------------------"
+}
+
+# Optionally export the data to a CSV file for further processing
+$GPOs | Select-Object DisplayName, Id, DomainName, CreationTime, ModificationTime, Owner, GpoStatus |
+Export-Csv -Path "C:\Temp\AllGPOs.csv" -NoTypeInformation
+
+Write-Host "Report exported to C:\Temp\AllGPOs.csv"
